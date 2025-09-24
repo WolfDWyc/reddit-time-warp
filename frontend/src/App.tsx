@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Header } from './components/Header';
 import { SubredditSelector } from './components/SubredditSelector';
 import { TimeSelector } from './components/TimeSelector';
+import { IMDbSearchButton } from './components/IMDbSearchButton';
+import { IMDbSearchDialog } from './components/IMDbSearchDialog';
 import { SortSelector } from './components/SortSelector';
 import { SubmissionList } from './components/SubmissionList';
 import { WarpButton } from './components/WarpButton';
@@ -19,6 +21,7 @@ const initialState: TimeWarpState = {
 export const App = () => {
   const [state, setState] = useState<TimeWarpState>(initialState);
   const [hasWarped, setHasWarped] = useState(false);
+  const [isIMDbDialogOpen, setIsIMDbDialogOpen] = useState(false);
 
   const handleSortChange = (sortBy: 'new' | 'old' | 'top' | 'hot') => {
     setState(prev => ({ ...prev, sortBy }));
@@ -44,6 +47,31 @@ export const App = () => {
     setHasWarped(true);
   };
 
+  const handleIMDbWarp = (timestamp: number) => {
+    console.log('handleIMDbWarp called with timestamp:', timestamp);
+    console.log('Current state before update:', state);
+    
+    // Get current subreddit value
+    const subredditInput = document.querySelector('input[placeholder="Invincible"]') as HTMLInputElement;
+    const cleanSubreddit = subredditInput?.value.trim().replace(/^r\//, '') || 'Invincible';
+    
+    console.log('Subreddit input value:', subredditInput?.value);
+    console.log('Clean subreddit:', cleanSubreddit);
+    
+    const newState = {
+      ...state,
+      subreddit: cleanSubreddit,
+      timestamp: timestamp,
+    };
+    
+    console.log('New state:', newState);
+    
+    setState(newState);
+    setHasWarped(true);
+    
+    console.log('State updated and hasWarped set to true');
+  };
+
   return (
     <div className="min-h-screen bg-reddit-light dark:bg-black flex flex-col">
       <Header />
@@ -60,6 +88,10 @@ export const App = () => {
             <TimeSelector
               timestamp={1617036992}
               onTimestampChange={() => {}}
+            />
+            
+            <IMDbSearchButton 
+              onClick={() => setIsIMDbDialogOpen(true)}
             />
             
             <WarpButton onClick={handleWarp} />
@@ -99,6 +131,14 @@ export const App = () => {
       </main>
       
       <Footer />
+
+      {/* IMDb Search Dialog */}
+      <IMDbSearchDialog
+        isOpen={isIMDbDialogOpen}
+        onClose={() => setIsIMDbDialogOpen(false)}
+        defaultSearchTerm={state.subreddit}
+        onWarpToEpisode={handleIMDbWarp}
+      />
     </div>
   );
 };

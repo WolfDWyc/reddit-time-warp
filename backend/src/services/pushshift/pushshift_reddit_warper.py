@@ -24,12 +24,10 @@ class PushshiftRedditWarper(RedditWarper):
     async def get_subreddit(
         self, subreddit_name: str, snapshot_datetime: datetime
     ) -> SubredditSnapshot:
-        submissions = await self.pushshift_dump_fetcher.fetch_subreddit_dump(
-            subreddit_name
-        )
+        submissions = self.pushshift_dump_fetcher.fetch_subreddit_dump(subreddit_name)
 
         submissions_list: List[Submission] = []
-        for submission in submissions:
+        async for submission in submissions:
             if submission.get("subreddit") != subreddit_name:
                 continue
             # Convert created_utc (int/float) to datetime

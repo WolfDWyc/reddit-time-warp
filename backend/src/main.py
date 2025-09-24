@@ -15,14 +15,14 @@ from services.reddit_warper import RedditWarper
 
 
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = os.getenv("PORT", 8000)
+PORT = int(os.getenv("PORT", 8000)) 
 RELOAD = os.getenv("RELOAD", "true").lower() == "true"
 TORRENT_URL = os.getenv("TORRENT_URL", "https://academictorrents.com/download/1614740ac8c94505e4ecb9d88be8bed7b6afddd4.torrent")
 TORRENT_SUBREDDITS_PATH = os.getenv("TORRENT_SUBREDDITS_PATH", "subreddits24")
 TORRENT_CACHE_DIR = os.getenv("TORRENT_CACHE_DIR", r"D:\Projects\redditwarp\backend\.torrent_cache")
 SUBREDDIT_CACHE_DIR = os.getenv("SUBREDDIT_CACHE_DIR", r"D:\Projects\redditwarp\backend\.subreddit_cache")
-SUBREDDIT_CACHE_MAX_SIZE_BYTES = os.getenv("SUBREDDIT_CACHE_MAX_SIZE_BYTES", 2 * 1024 * 1024 * 1024)
-MAX_SUBREDDIT_SIZE_BYTES = os.getenv("MAX_SUBREDDIT_SIZE_BYTES", 250 * 1024 * 1024)
+SUBREDDIT_CACHE_MAX_SIZE_BYTES = int(os.getenv("SUBREDDIT_CACHE_MAX_SIZE_BYTES", 2 * 1024 * 1024 * 1024))
+MAX_SUBREDDIT_SIZE_BYTES = int(os.getenv("MAX_SUBREDDIT_SIZE_BYTES", 250 * 1024 * 1024))
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")
 
 app = FastAPI()
