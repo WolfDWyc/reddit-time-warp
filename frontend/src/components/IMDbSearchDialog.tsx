@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { X, Search, Calendar, Clock, Star, Play, Zap } from 'lucide-react';
-import type { IMDbTitle, IMDbEpisode, IMDbSearchResponse, IMDbEpisodesResponse } from '../types';
+import { X, Search, Calendar, Clock, Star, Play, Zap, ChevronDown } from 'lucide-react';
+import type { IMDbTitle, IMDbEpisode, IMDbSearchResponse, IMDbEpisodesResponse, IMDbReleaseDatesResponse } from '../types';
 
 interface IMDbSearchDialogProps {
   isOpen: boolean;
@@ -22,6 +22,7 @@ export const IMDbSearchDialog = ({
   const [isSearching, setIsSearching] = useState(false);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [viewMode, setViewMode] = useState<'search' | 'episodes' | 'warp'>('search');
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
 
   const searchTitles = useCallback(async (query: string): Promise<void> => {
     if (!query.trim()) return;
@@ -55,26 +56,47 @@ export const IMDbSearchDialog = ({
     }
   }, []);
 
-  // Reset state when dialog opens/closes and auto-search with default term
+  // Reset state when dialog opens/closes and auto-search with current input value
   useEffect(() => {
     if (isOpen) {
-      setSearchTerm(defaultSearchTerm);
+      // Get the current subreddit value from the input field
+      const subredditInput = document.querySelector('input[placeholder="Invincible"]') as HTMLInputElement;
+      const currentSubreddit = subredditInput?.value.trim().replace(/^r\//, '') || defaultSearchTerm;
+      
+      console.log('Dialog opened with current subreddit:', currentSubreddit);
+      setSearchTerm(currentSubreddit);
       setSearchResults([]);
       setSelectedTitle(null);
       setEpisodes([]);
       setViewMode('search');
       
-      // Auto-search with the default term when dialog opens
-      if (defaultSearchTerm.trim()) {
-        searchTitles(defaultSearchTerm);
+      // Auto-search with the current input value when dialog opens
+      if (currentSubreddit.trim()) {
+        console.log('Auto-searching with term:', currentSubreddit);
+        searchTitles(currentSubreddit);
       }
     }
-  }, [isOpen, defaultSearchTerm, searchTitles]);
+  }, [isOpen, searchTitles]);
+
 
   // Debug view mode changes
   useEffect(() => {
     console.log('View mode changed to:', viewMode);
   }, [viewMode]);
+
+  // Close dropdown when clicking outside - DISABLED AGAIN
+  // useEffect(() => {
+  //   const handleClickOutside = () => {
+  //     if (openDropdownId) {
+  //       setOpenDropdownId(null);
+  //     }
+  //   };
+
+  //   if (openDropdownId) {
+  //     document.addEventListener('mousedown', handleClickOutside);
+  //     return () => document.removeEventListener('mousedown', handleClickOutside);
+  //   }
+  // }, [openDropdownId]);
 
   const loadEpisodes = async (titleId: string): Promise<void> => {
     setIsLoadingEpisodes(true);
@@ -104,6 +126,46 @@ export const IMDbSearchDialog = ({
       setEpisodes([]);
     } finally {
       setIsLoadingEpisodes(false);
+    }
+  };
+
+  const loadReleaseDates = async (titleId: string): Promise<{ year: number; month?: number; day?: number } | null> => {
+    try {
+      console.log('Loading release dates for title:', titleId);
+      const response = await fetch(`https://api.imdbapi.dev/titles/${titleId}/releaseDates`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+      console.log('Release dates response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Release dates API error:', response.status, errorText);
+        return null;
+      }
+      
+      const data: IMDbReleaseDatesResponse = await response.json();
+      console.log('Release dates data:', data);
+      
+      // Find the earliest release date (usually the original release)
+      if (data.releaseDates && data.releaseDates.length > 0) {
+        const earliestRelease = data.releaseDates.reduce((earliest, current) => {
+          const earliestDate = new Date(earliest.releaseDate.year, (earliest.releaseDate.month || 1) - 1, earliest.releaseDate.day || 1);
+          const currentDate = new Date(current.releaseDate.year, (current.releaseDate.month || 1) - 1, current.releaseDate.day || 1);
+          return currentDate < earliestDate ? current : earliest;
+        });
+        
+        console.log('Earliest release date:', earliestRelease.releaseDate);
+        return earliestRelease.releaseDate;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error loading release dates:', error);
+      return null;
     }
   };
 
@@ -138,22 +200,21 @@ export const IMDbSearchDialog = ({
     }
   };
 
-  const handleWarpToEpisode = (episode: IMDbEpisode) => {
-    console.log('handleWarpToEpisode called with:', episode);
+  const handleWarpToEpisode = (episode: IMDbEpisode, hoursAfter: number = 48) => {
     if (episode.releaseDate) {
-      // Calculate timestamp 24 hours after episode release
+      // Calculate timestamp for the specified hours after episode release
       const releaseDate = new Date(
         episode.releaseDate.year,
         (episode.releaseDate.month || 1) - 1,
         episode.releaseDate.day || 1
       );
-      const warpTime = new Date(releaseDate.getTime() + 24 * 60 * 60 * 1000); // Add 24 hours
+      const warpTime = new Date(releaseDate);
+      warpTime.setHours(releaseDate.getHours() + hoursAfter);
       const timestamp = Math.floor(warpTime.getTime() / 1000);
       
       console.log('Episode release date:', releaseDate);
-      console.log('Warp time (24h later):', warpTime);
+      console.log(`Warp time (${hoursAfter}h after):`, warpTime);
       console.log('Calculated timestamp:', timestamp);
-      console.log('Calling onWarpToEpisode with timestamp:', timestamp);
       
       onWarpToEpisode(timestamp);
       onClose();
@@ -162,25 +223,42 @@ export const IMDbSearchDialog = ({
     }
   };
 
-  const handleWarpToTitle = (title: IMDbTitle) => {
-    console.log('handleWarpToTitle called with:', title);
-    if (title.startYear) {
-      // Calculate timestamp 24 hours after title release
-      const releaseDate = new Date(title.startYear, 0, 1); // January 1st of the release year
-      const warpTime = new Date(releaseDate.getTime() + 24 * 60 * 60 * 1000); // Add 24 hours
-      const timestamp = Math.floor(warpTime.getTime() / 1000);
-      
-      console.log('Title start year:', title.startYear);
-      console.log('Release date (Jan 1st):', releaseDate);
-      console.log('Warp time (24h later):', warpTime);
-      console.log('Calculated timestamp:', timestamp);
-      console.log('Calling onWarpToEpisode with timestamp:', timestamp);
-      
-      onWarpToEpisode(timestamp);
-      onClose();
+  const handleWarpToTitle = async (title: IMDbTitle, hoursAfter: number = 48) => {
+    console.log('handleWarpToTitle called with:', title, 'hoursAfter:', hoursAfter);
+    
+    // Try to get the actual release date first
+    const actualReleaseDate = await loadReleaseDates(title.id);
+    
+    let releaseDate: Date;
+    
+    if (actualReleaseDate) {
+      // Use the actual release date
+      releaseDate = new Date(
+        actualReleaseDate.year,
+        (actualReleaseDate.month || 1) - 1,
+        actualReleaseDate.day || 1
+      );
+      console.log('Using actual release date:', releaseDate);
+    } else if (title.startYear) {
+      // Fallback to January 1st of the release year
+      releaseDate = new Date(title.startYear, 0, 1);
+      console.log('Using fallback release date (Jan 1st):', releaseDate);
     } else {
-      console.log('No start year for title:', title);
+      console.log('No release date information available for title:', title);
+      return;
     }
+    
+    // Calculate timestamp for the specified hours after release
+    const warpTime = new Date(releaseDate);
+    warpTime.setHours(releaseDate.getHours() + hoursAfter);
+    const timestamp = Math.floor(warpTime.getTime() / 1000);
+    
+    console.log(`Warp time (${hoursAfter}h after):`, warpTime);
+    console.log('Calculated timestamp:', timestamp);
+    console.log('Calling onWarpToEpisode with timestamp:', timestamp);
+    
+    onWarpToEpisode(timestamp);
+    onClose();
   };
 
   const formatRuntime = (seconds?: number): string => {
@@ -197,8 +275,24 @@ export const IMDbSearchDialog = ({
     return `${date.year}-${month}-${day}`;
   };
 
+  const TITLE_TYPE_MAP: Record<string, string> = {
+    movie: "Movie",
+    tvSeries: "TV Series",
+    tvEpisode: "TV Episode",
+    tvMiniSeries: "TV Mini Series",
+    tvMovie: "TV Movie",
+    tvSpecial: "TV Special",
+    tvShort: "TV Short",
+    video: "Video",
+    videoGame: "Video Game",
+    short: "Short",
+    documentary: "Documentary",
+    // Add more known types as needed
+  };
+
   const formatTitleType = (type: string): string => {
-    // Convert camelCase and snake_case to proper title case
+    if (TITLE_TYPE_MAP[type]) return TITLE_TYPE_MAP[type];
+    // Fallback: Convert camelCase and snake_case to proper title case
     return type
       .replace(/([A-Z])/g, ' $1') // Add space before capital letters
       .replace(/_/g, ' ') // Replace underscores with spaces
@@ -208,14 +302,88 @@ export const IMDbSearchDialog = ({
       .join(' '); // Join with spaces
   };
 
+  const WarpDropdown = ({ 
+    id, 
+    onWarp24h, 
+    onWarp36h, 
+    onWarp48h 
+  }: { 
+    id: string; 
+    onWarp24h: () => void; 
+    onWarp36h: () => void; 
+    onWarp48h: () => void; 
+  }) => {
+    const isOpen = openDropdownId === id;
+    
+    return (
+      <div className="relative">
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Dropdown button clicked, current state:', isOpen, 'setting to:', isOpen ? null : id);
+            setOpenDropdownId(isOpen ? null : id);
+          }}
+          className="flex items-center space-x-1 px-2 sm:px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-lg transition-colors"
+        >
+          <Zap className="h-3 w-3" />
+          <span className="hidden sm:inline">Warp Here</span>
+          <span className="sm:hidden">Warp</span>
+          <ChevronDown className="h-3 w-3" />
+        </button>
+        
+        {isOpen && (
+          <div 
+            className="absolute right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[100px] sm:min-w-[120px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onWarp24h();
+                setOpenDropdownId(null);
+              }}
+              className="w-full px-2 sm:px-3 py-2 text-left text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 first:rounded-t-lg"
+            >
+              24h after
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onWarp36h();
+                setOpenDropdownId(null);
+              }}
+              className="w-full px-2 sm:px-3 py-2 text-left text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              36h after
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onWarp48h();
+                setOpenDropdownId(null);
+              }}
+              className="w-full px-2 sm:px-3 py-2 text-left text-xs sm:text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 last:rounded-b-lg"
+            >
+              48h after
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-1 sm:p-4 z-50">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-4xl w-full max-h-[98vh] sm:max-h-[90vh] overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+        <div className="flex items-center justify-between p-3 sm:p-6 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-base sm:text-xl font-semibold text-gray-900 dark:text-white">
             IMDb Search
           </h2>
           <button
@@ -226,7 +394,7 @@ export const IMDbSearchDialog = ({
           </button>
         </div>
 
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+        <div className="p-3 sm:p-6 overflow-y-auto max-h-[calc(98vh-100px)] sm:max-h-[calc(90vh-120px)]">
           {/* Search Form */}
           {viewMode === 'search' && (
             <form onSubmit={handleSearch} className="mb-6">
@@ -252,42 +420,42 @@ export const IMDbSearchDialog = ({
           )}
 
           {!isSearching && searchResults.length > 0 && viewMode === 'search' && (
-            <div className="mb-6">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+            <div className="mb-4 sm:mb-6">
+              <h3 className="text-base sm:text-lg font-medium text-gray-900 dark:text-white mb-3 sm:mb-4">
                 Search Results
               </h3>
-              <div className="space-y-3">
+              <div className="space-y-2 sm:space-y-3">
                 {searchResults.map((title) => (
                   <div
                     key={title.id}
-                    className="p-4 rounded-lg border border-gray-200 dark:border-gray-700"
+                    className="p-3 sm:p-4 rounded-lg border border-gray-200 dark:border-gray-700"
                   >
-                    <div className="flex items-start space-x-4">
+                    <div className="flex items-start space-x-3 sm:space-x-4">
                       {title.primaryImage && (
                         <img
                           src={title.primaryImage.url}
                           alt={title.primaryTitle}
-                          className="w-20 h-32 object-cover rounded flex-shrink-0"
+                          className="w-16 h-24 sm:w-20 sm:h-32 object-cover rounded flex-shrink-0"
                         />
                       )}
                       <div className="flex-1 min-w-0">
-                        <h4 className="font-medium text-gray-900 dark:text-white">
+                        <h4 className="font-medium text-gray-900 dark:text-white text-sm sm:text-base">
                           {title.primaryTitle}
                         </h4>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                        <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">
                           {formatTitleType(title.type)} • {title.startYear}
                           {title.endYear && title.endYear !== title.startYear && ` - ${title.endYear}`}
                         </p>
                         {title.rating && (
                           <div className="flex items-center space-x-1 mt-1">
                             <Star className="h-3 w-3 text-yellow-500 fill-current" />
-                            <span className="text-sm text-gray-600 dark:text-gray-400">
+                            <span className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">
                               {title.rating.aggregateRating.toFixed(1)} ({title.rating.voteCount.toLocaleString()} votes)
                             </span>
                           </div>
                         )}
                         {title.plot && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2">
+                          <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mt-2 line-clamp-2">
                             {title.plot}
                           </p>
                         )}
@@ -304,21 +472,21 @@ export const IMDbSearchDialog = ({
                             return (
                               <button
                                 onClick={() => handleBrowse(title)}
-                                className="flex items-center space-x-1 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-lg transition-colors"
+                                className="flex items-center space-x-1 px-2 sm:px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs sm:text-sm rounded-lg transition-colors"
                               >
                                 <Play className="h-3 w-3" />
-                                <span>Browse</span>
+                                <span className="hidden sm:inline">Browse Episodes</span>
+                                <span className="sm:hidden">Browse</span>
                               </button>
                             );
                           } else {
                             return (
-                              <button
-                                onClick={() => handleBrowse(title)}
-                                className="flex items-center space-x-1 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-lg transition-colors"
-                              >
-                                <Zap className="h-3 w-3" />
-                                <span>Warp Here</span>
-                              </button>
+                              <WarpDropdown
+                                id={`title-${title.id}`}
+                                onWarp24h={() => handleWarpToTitle(title, 24)}
+                                onWarp36h={() => handleWarpToTitle(title, 36)}
+                                onWarp48h={() => handleWarpToTitle(title, 48)}
+                              />
                             );
                           }
                         })()}
@@ -353,32 +521,33 @@ export const IMDbSearchDialog = ({
               ) : episodes.length > 0 ? (
                 <div className="space-y-3">
                   {episodes.map((episode) => (
-                    <div
-                      key={episode.id}
-                      className="p-4 rounded-lg border border-gray-200 dark:border-gray-700"
-                    >
-                      <div className="flex items-start space-x-4">
-                        {episode.primaryImage && (
-                          <img
-                            src={episode.primaryImage.url}
-                            alt={episode.title}
-                            className="w-24 h-18 object-cover rounded flex-shrink-0"
-                          />
-                        )}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between">
-                            <h4 className="font-medium text-gray-900 dark:text-white">
-                              S{episode.season}E{episode.episodeNumber}: {episode.title}
-                            </h4>
-                            <button
-                              onClick={() => handleWarpToEpisode(episode)}
-                              className="flex items-center space-x-1 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-lg transition-colors flex-shrink-0 ml-4"
-                            >
-                              <Zap className="h-3 w-3" />
-                              <span>Warp Here</span>
-                            </button>
+                  <div
+                    key={episode.id}
+                    className="p-3 sm:p-4 rounded-lg border border-gray-200 dark:border-gray-700"
+                  >
+                    <div className="flex items-start space-x-3 sm:space-x-4">
+                      {episode.primaryImage && (
+                        <img
+                          src={episode.primaryImage.url}
+                          alt={episode.title}
+                          className="w-16 h-12 sm:w-24 sm:h-18 object-cover rounded flex-shrink-0"
+                        />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between space-y-2 sm:space-y-0">
+                          <h4 className="font-medium text-gray-900 dark:text-white text-sm sm:text-base">
+                            S{episode.season}E{episode.episodeNumber}: {episode.title}
+                          </h4>
+                          <div className="flex-shrink-0">
+                            <WarpDropdown
+                              id={`episode-${episode.id}`}
+                              onWarp24h={() => handleWarpToEpisode(episode, 24)}
+                              onWarp36h={() => handleWarpToEpisode(episode, 36)}
+                              onWarp48h={() => handleWarpToEpisode(episode, 48)}
+                            />
                           </div>
-                          <div className="flex items-center space-x-4 mt-1 text-sm text-gray-600 dark:text-gray-400">
+                        </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs sm:text-sm text-gray-600 dark:text-gray-400">
                             {episode.releaseDate && (
                               <div className="flex items-center space-x-1">
                                 <Calendar className="h-3 w-3" />
@@ -462,13 +631,12 @@ export const IMDbSearchDialog = ({
                       </p>
                     )}
                     <div className="mt-4">
-                      <button
-                        onClick={() => handleWarpToTitle(selectedTitle)}
-                        className="flex items-center space-x-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors"
-                      >
-                        <Play className="h-4 w-4" />
-                        <span>Warp Here</span>
-                      </button>
+                      <WarpDropdown
+                        id={`warp-${selectedTitle.id}`}
+                        onWarp24h={() => handleWarpToTitle(selectedTitle, 24)}
+                        onWarp36h={() => handleWarpToTitle(selectedTitle, 36)}
+                        onWarp48h={() => handleWarpToTitle(selectedTitle, 48)}
+                      />
                     </div>
                   </div>
                 </div>

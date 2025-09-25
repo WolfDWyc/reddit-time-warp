@@ -48,16 +48,10 @@ export const App = () => {
   };
 
   const handleIMDbWarp = (timestamp: number) => {
-    console.log('handleIMDbWarp called with timestamp:', timestamp);
-    console.log('Current state before update:', state);
-    
     // Get current subreddit value
     const subredditInput = document.querySelector('input[placeholder="Invincible"]') as HTMLInputElement;
     const cleanSubreddit = subredditInput?.value.trim().replace(/^r\//, '') || 'Invincible';
-    
-    console.log('Subreddit input value:', subredditInput?.value);
-    console.log('Clean subreddit:', cleanSubreddit);
-    
+
     const newState = {
       ...state,
       subreddit: cleanSubreddit,
@@ -81,20 +75,22 @@ export const App = () => {
         <div className="card p-4 mb-6">
           <div className="flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-4">
             <SubredditSelector
-              subreddit="Invincible"
+              subreddit={state.subreddit}
               onSubredditChange={() => {}}
             />
             
             <TimeSelector
-              timestamp={1617036992}
+              timestamp={state.timestamp}
               onTimestampChange={() => {}}
             />
             
+
+        
+            <WarpButton onClick={handleWarp} />
+
             <IMDbSearchButton 
               onClick={() => setIsIMDbDialogOpen(true)}
             />
-            
-            <WarpButton onClick={handleWarp} />
           </div>
         </div>
 

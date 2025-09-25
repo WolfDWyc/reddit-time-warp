@@ -17,7 +17,7 @@ export const IMDbSearchButton = ({ onClick, disabled = false }: IMDbSearchButton
       }`}
     >
       <Search className="h-4 w-4" />
-      <span className="text-sm">IMDB Warp</span>
+      <span className="text-sm">IMDb Warp</span>
     </button>
   );
 };

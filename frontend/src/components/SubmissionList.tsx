@@ -133,7 +133,7 @@ export const SubmissionList = ({ subreddit, timestamp, sortBy, timePeriod }: Sub
       <div className="card p-8 text-center">
         <AlertCircle className="h-8 w-8 text-red-500 mx-auto mb-4" />
         <p className="text-red-600 mb-4">{error}</p>
-        <button onClick={() => loadSubmissions()} className="btn-primary">
+        <button onClick={() => loadSubmissions()} className="btn-primary w-6">
           <RefreshCw className="h-4 w-4 mr-2" />
           Try Again
         </button>

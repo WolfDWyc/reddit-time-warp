@@ -172,3 +172,20 @@ export interface IMDbEpisodesResponse {
   totalCount: number;
   nextPageToken?: string;
 }
+
+export interface IMDbReleaseDate {
+  country: {
+    code: string;
+    name: string;
+  };
+  releaseDate: {
+    year: number;
+    month?: number;
+    day?: number;
+  };
+  attributes: string[];
+}
+
+export interface IMDbReleaseDatesResponse {
+  releaseDates: IMDbReleaseDate[];
+}
