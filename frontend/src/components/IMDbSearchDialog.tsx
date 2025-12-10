@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Search, Calendar, Clock, Star, Play, Zap, ChevronDown } from 'lucide-react';
 import type { IMDbTitle, IMDbEpisode, IMDbSearchResponse, IMDbEpisodesResponse, IMDbReleaseDatesResponse } from '../types';
 
@@ -21,8 +21,12 @@ export const IMDbSearchDialog = ({
   const [episodes, setEpisodes] = useState<IMDbEpisode[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
+  const [isLoadingMoreEpisodes, setIsLoadingMoreEpisodes] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'search' | 'episodes' | 'warp'>('search');
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
 
   const searchTitles = useCallback(async (query: string): Promise<void> => {
     if (!query.trim()) return;
@@ -68,6 +72,7 @@ export const IMDbSearchDialog = ({
       setSearchResults([]);
       setSelectedTitle(null);
       setEpisodes([]);
+      setNextPageToken(null);
       setViewMode('search');
       
       // Auto-search with the current input value when dialog opens
@@ -98,11 +103,20 @@ export const IMDbSearchDialog = ({
   //   }
   // }, [openDropdownId]);
 
-  const loadEpisodes = async (titleId: string): Promise<void> => {
-    setIsLoadingEpisodes(true);
+  const loadEpisodes = useCallback(async (titleId: string, pageToken?: string | null, append: boolean = false): Promise<void> => {
+    if (append) {
+      setIsLoadingMoreEpisodes(true);
+    } else {
+      setIsLoadingEpisodes(true);
+    }
+    
     try {
-      console.log('Loading episodes for title:', titleId);
-      const response = await fetch(`https://api.imdbapi.dev/titles/${titleId}/episodes`, {
+      const url = pageToken 
+        ? `https://api.imdbapi.dev/titles/${titleId}/episodes?pageToken=${encodeURIComponent(pageToken)}`
+        : `https://api.imdbapi.dev/titles/${titleId}/episodes`;
+      
+      console.log('Loading episodes for title:', titleId, 'pageToken:', pageToken, 'append:', append);
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
@@ -119,15 +133,64 @@ export const IMDbSearchDialog = ({
       
       const data: IMDbEpisodesResponse = await response.json();
       console.log('Episodes data:', data);
-      setEpisodes(data.episodes || []);
+      
+      if (append) {
+        setEpisodes(prev => [...prev, ...(data.episodes || [])]);
+      } else {
+        setEpisodes(data.episodes || []);
+      }
+      
+      setNextPageToken(data.nextPageToken || null);
     } catch (error) {
       console.error('Error loading episodes:', error);
-      // Show a more user-friendly error message
-      setEpisodes([]);
+      if (!append) {
+        setEpisodes([]);
+      }
     } finally {
-      setIsLoadingEpisodes(false);
+      if (append) {
+        setIsLoadingMoreEpisodes(false);
+      } else {
+        setIsLoadingEpisodes(false);
+      }
     }
-  };
+  }, []);
+
+  const loadMoreEpisodes = useCallback((): void => {
+    if (!selectedTitle || !nextPageToken || isLoadingMoreEpisodes) return;
+    loadEpisodes(selectedTitle.id, nextPageToken, true);
+  }, [selectedTitle, nextPageToken, isLoadingMoreEpisodes, loadEpisodes]);
+
+  // Infinite scroll: observe when load more trigger comes into view
+  useEffect(() => {
+    if (viewMode !== 'episodes' || !nextPageToken || isLoadingMoreEpisodes) {
+      return;
+    }
+
+    const triggerElement = loadMoreTriggerRef.current;
+    if (!triggerElement) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting && nextPageToken && !isLoadingMoreEpisodes) {
+          loadMoreEpisodes();
+        }
+      },
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '100px',
+        threshold: 0.1,
+      }
+    );
+
+    observer.observe(triggerElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [viewMode, nextPageToken, isLoadingMoreEpisodes, loadMoreEpisodes]);
 
   const loadReleaseDates = async (titleId: string): Promise<{ year: number; month?: number; day?: number } | null> => {
     try {
@@ -192,11 +255,13 @@ export const IMDbSearchDialog = ({
     
     if (isTVSeries) {
       setViewMode('episodes');
-      loadEpisodes(title.id);
+      setNextPageToken(null);
+      loadEpisodes(title.id, null, false);
     } else {
       // For movies or other titles, go directly to warp mode
       setViewMode('warp');
       setEpisodes([]);
+      setNextPageToken(null);
     }
   };
 
@@ -394,7 +459,10 @@ export const IMDbSearchDialog = ({
           </button>
         </div>
 
-        <div className="p-3 sm:p-6 overflow-y-auto max-h-[calc(98vh-100px)] sm:max-h-[calc(90vh-120px)]">
+        <div 
+          ref={scrollContainerRef}
+          className="p-3 sm:p-6 overflow-y-auto max-h-[calc(98vh-100px)] sm:max-h-[calc(90vh-120px)]"
+        >
           {/* Search Form */}
           {viewMode === 'search' && (
             <form onSubmit={handleSearch} className="mb-6">
@@ -576,6 +644,18 @@ export const IMDbSearchDialog = ({
                       </div>
                     </div>
                   ))}
+                  
+                  {/* Infinite scroll trigger */}
+                  {nextPageToken && (
+                    <div ref={loadMoreTriggerRef} className="py-4">
+                      {isLoadingMoreEpisodes && (
+                        <div className="text-center">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mx-auto"></div>
+                          <p className="text-gray-600 dark:text-gray-400 mt-2 text-sm">Loading more episodes...</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-8">

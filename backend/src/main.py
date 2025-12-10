@@ -6,12 +6,12 @@ from pydantic import BaseModel
 import uvicorn
 from loguru import logger
 from fastapi.middleware.cors import CORSMiddleware
-from services.cached_reddit_warper import CachedRedditWarper
-from services.pushshift.pushshift_reddit_warper import PushshiftRedditWarper
-from services.pushshift.pushshift_dump_fetcher import PushshiftDumpFetcher
-from services.pushshift.torrent_downloader import TorrentDownloader
-from services.subreddit_snapshot import Submission, Comment
-from services.reddit_warper import RedditWarper
+from src.services.cached_reddit_warper import CachedRedditWarper
+from src.services.pushshift.pushshift_reddit_warper import PushshiftRedditWarper
+from src.services.pushshift.pushshift_dump_fetcher import PushshiftDumpFetcher
+from src.services.pushshift.torrent_downloader import TorrentDownloader
+from src.services.subreddit_snapshot import Submission, Comment
+from src.services.reddit_warper import RedditWarper
 
 
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -19,6 +19,7 @@ PORT = int(os.getenv("PORT", 8000))
 RELOAD = os.getenv("RELOAD", "true").lower() == "true"
 TORRENT_URL = os.getenv("TORRENT_URL", "https://academictorrents.com/download/1614740ac8c94505e4ecb9d88be8bed7b6afddd4.torrent")
 TORRENT_SUBREDDITS_PATH = os.getenv("TORRENT_SUBREDDITS_PATH", "subreddits24")
+DUMP_READ_CHUNK_SIZE = int(os.getenv("DUMP_READ_CHUNK_SIZE", 2**21))
 TORRENT_CACHE_DIR = os.getenv("TORRENT_CACHE_DIR", r"D:\Projects\redditwarp\backend\.torrent_cache")
 SUBREDDIT_CACHE_DIR = os.getenv("SUBREDDIT_CACHE_DIR", r"D:\Projects\redditwarp\backend\.subreddit_cache")
 SUBREDDIT_CACHE_MAX_SIZE_BYTES = int(os.getenv("SUBREDDIT_CACHE_MAX_SIZE_BYTES", 2 * 1024 * 1024 * 1024))
@@ -66,23 +67,24 @@ def get_warper() -> RedditWarper:
     FastAPI dependency that provides a RedditWarper instance.
     Creates a cached warper with Pushshift backend.
     """
-    logger.info("Creating RedditWarper dependency instance")
-    warper = CachedRedditWarper(
-        inner_warper=PushshiftRedditWarper(
-            pushshift_dump_fetcher=PushshiftDumpFetcher(
-                torrent_downloader=TorrentDownloader(
-                    torrent_url=TORRENT_URL,
-                    cache_dir=TORRENT_CACHE_DIR,
+    if not hasattr(app.state, "warper"):
+        logger.info("Creating RedditWarper dependency instance")
+        app.state.warper = CachedRedditWarper(
+            inner_warper=PushshiftRedditWarper(
+                pushshift_dump_fetcher=PushshiftDumpFetcher(
+                    torrent_downloader=TorrentDownloader(
+                        torrent_url=TORRENT_URL,
+                        cache_dir=TORRENT_CACHE_DIR,
+                    ),
+                    subreddits_path=TORRENT_SUBREDDITS_PATH,
+                    read_chunk_size=DUMP_READ_CHUNK_SIZE,
                 ),
-                subreddits_path=TORRENT_SUBREDDITS_PATH,
+                max_subreddit_size_bytes=MAX_SUBREDDIT_SIZE_BYTES,
             ),
-            max_subreddit_size_bytes=MAX_SUBREDDIT_SIZE_BYTES,
-        ),
-        cache_dir=SUBREDDIT_CACHE_DIR,
-        max_size_bytes=SUBREDDIT_CACHE_MAX_SIZE_BYTES,
-    )
-    logger.info("RedditWarper dependency instance created successfully")
-    return warper
+            cache_dir=SUBREDDIT_CACHE_DIR,
+            max_size_bytes=SUBREDDIT_CACHE_MAX_SIZE_BYTES,
+        )
+    return app.state.warper
 
 async def validate_subreddit(subreddit: str, warper: RedditWarper = Depends(get_warper)) -> str:
     """

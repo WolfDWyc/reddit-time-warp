@@ -21,8 +21,10 @@ EXPOSE 8000
 
 # Set environment variables
 ENV RELOAD=false
+ENV WORKERS=1
+ENV WORKER_TIMEOUT=300
 ENV TORRENT_CACHE_DIR=.torrent_cache
 ENV SUBREDDIT_CACHE_DIR=.subreddit_cache
 
-# Run the application
-CMD ["uv", "run", "python", "src/main.py"]
+# Run the application with gunicorn and uvicorn workers
+CMD uv run gunicorn src.main:app -w ${WORKERS} -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout ${WORKER_TIMEOUT}

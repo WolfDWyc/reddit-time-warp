@@ -7,31 +7,36 @@ import aiohttp
 import aiofiles
 import hashlib
 from pathlib import Path
-
+import inspect
 from loguru import logger
 from aiotorrent import Torrent
+import diskcache
+import logging
+import contextlib   
+from typing import Generator
 
+class InterceptHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
 
-async def _monitor_download_progress(file_obj, filename: str) -> None:
-    """
-    Monitors download progress and logs it periodically.
-    """
-    last_progress = -1
-    while True:
+        level: str | int
         try:
-            progress = file_obj.get_download_progress()
-            if progress != last_progress and progress % 10 == 0:  # Log every 10%
-                logger.debug(f"Download progress for '{filename}': {progress}%")
-                last_progress = progress
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
 
-            if progress >= 100:
-                logger.debug(f"Download completed for '{filename}': 100%")
-                break
+        # Find caller from where originated the logged message.
+        frame, depth = inspect.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
+            frame = frame.f_back
+            depth += 1
 
-            await asyncio.sleep(1)  # Check every second
-        except Exception as e:
-            logger.debug(f"Progress monitoring error for '{filename}': {e}")
-            break
+        # If it's a debug message, don't log it
+        if level == "DEBUG":
+            return
+        logger.opt(depth=depth, exception=record.exc_info).debug(record.getMessage())
+
+
+logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
 
 def _get_file_path_from_info(file_info: dict) -> str:
@@ -42,58 +47,113 @@ def _get_file_path_from_info(file_info: dict) -> str:
     return os.path.join(*file_info["path"])
 
 
-class TorrentDownloader:
-    def __init__(self, torrent_url: str, cache_dir: Optional[str] = ".torrent_cache"):
-        self.torrent_url = torrent_url
+class FileCache:
+    def __init__(self, cache_dir: Optional[str] = ".torrent_cache"):
         self.cache_dir = cache_dir
         if self.cache_dir:
             os.makedirs(self.cache_dir, exist_ok=True)
+        self._content_cache_dir = os.path.join(self.cache_dir, "content")
+        self._metadata_cache_dir = os.path.join(self.cache_dir, "metadata")
+        os.makedirs(self._content_cache_dir, exist_ok=True)
+        os.makedirs(self._metadata_cache_dir, exist_ok=True)
+        
+        self._metadata_cache = diskcache.Cache(self._metadata_cache_dir)
 
-    def _get_cache_path(self, filename: str) -> Optional[str]:
-        if self.cache_dir:
-            url_hash = hashlib.sha256(self.torrent_url.encode()).hexdigest()
-            return os.path.join(self.cache_dir, url_hash, filename)
-        return None
+    def _get_cache_path(self, key: str) -> str:
+        # hexdigest the key
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        return os.path.join(self._content_cache_dir, key_hash)
 
-    def _get_torrent_cache_path(self) -> Optional[str]:
-        if self.cache_dir:
-            url_hash = hashlib.sha256(self.torrent_url.encode()).hexdigest()
-            return os.path.join(self.cache_dir, f"{url_hash}.torrent")
-        return None
+    def set(self, key: str, filename: str) -> str:
+        self._metadata_cache.set(key, filename)
 
-    async def _download_torrent_file(self, tmpdir: str) -> str:
+        # Copy the file to the content cache
+        shutil.copy2(filename, self._get_cache_path(key))
+
+        # Return the path to the content cache
+        return self._get_cache_path(key)
+    
+    def get(self, key: str) -> Optional[str]:
+        if key not in self._metadata_cache:
+            return None
+        
+        # Return the path to the content cache
+        return self._get_cache_path(key)
+    
+    def _get_lock_path(self, key: str) -> str:
+        return self._get_cache_path(key) + ".lock"
+    
+    async def lock_file(self, key: str) -> None:
+        logger.debug(f"Trying to lock file: {key} at path {self._get_lock_path(key)}")
+        # If the file is already locked, wait for it to be unlocked
+        time_waited = 0
+        while self.is_locked(key):
+            await asyncio.sleep(0.1)
+            if round(time_waited, 1) % 10 == 0 and round(time_waited, 1) > 0:
+                logger.warning(f"Waiting for lock file to be unlocked: {key}, waited for {round(time_waited, 1)} seconds")
+            time_waited += 0.1
+        lock_key = self._get_lock_path(key)
+        with open(lock_key, "w") as f:
+            f.write(key)
+        logger.debug(f"Locked file: {key}")
+    
+    async def unlock_file(self, key: str) -> None:
+        logger.debug(f"Unlocking file: {key}")
+        lock_key = self._get_lock_path(key)
+        if os.path.exists(lock_key):
+            os.remove(lock_key)
+                
+    def is_locked(self, key: str) -> bool:
+        lock_key = self._get_lock_path(key)
+        return os.path.exists(lock_key)
+
+    # Context manager for locking
+    @contextlib.asynccontextmanager
+    async def lock_context(self, key: str) -> Generator[None, None, None]:
+        try:
+            await self.lock_file(key)
+            yield
+        finally:
+            await self.unlock_file(key)
+
+class TorrentDownloader:
+    def __init__(self, torrent_url: str, cache_dir: str = ".torrent_cache"):
+        self.torrent_url = torrent_url
+        self.cache = FileCache(cache_dir)
+
+    async def _download_torrent_file(self) -> str:
         """
         Downloads the torrent file, using the cache if available.
         Returns the path to the torrent file (either in cache or tmpdir).
         """
-        cache_torrent_path = self._get_torrent_cache_path()
-        if cache_torrent_path and os.path.exists(cache_torrent_path):
-            logger.debug(f"Cache hit for torrent file: {cache_torrent_path}")
-            torrent_path = os.path.join(tmpdir, "temp.torrent")
-            shutil.copy2(cache_torrent_path, torrent_path)
-            return torrent_path
+        cached_torrent_path = self.cache.get(self.torrent_url)
+        if cached_torrent_path:
+            logger.debug(f"Cache hit for torrent file: {cached_torrent_path}")
+            return cached_torrent_path
 
         logger.debug(
             f"Cache miss for torrent file, downloading from: {self.torrent_url}"
         )
-        torrent_path = os.path.join(tmpdir, "temp.torrent")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                self.torrent_url, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                resp.raise_for_status()
-                async with aiofiles.open(torrent_path, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(8192):
-                        if chunk:
-                            await f.write(chunk)
+        async with self.cache.lock_context(self.torrent_url):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                torrent_path = os.path.join(tmpdir, "temp.torrent")
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        self.torrent_url, timeout=aiohttp.ClientTimeout(total=30)
+                    ) as resp:
+                        resp.raise_for_status()
+                        async with aiofiles.open(torrent_path, "wb") as f:
+                            async for chunk in resp.content.iter_chunked(8192):
+                                if chunk:
+                                    await f.write(chunk)
 
-        logger.debug(f"Downloaded torrent file to: {torrent_path}")
+                logger.debug(f"Downloaded torrent file to: {torrent_path}")
 
-        if cache_torrent_path:
-            os.makedirs(os.path.dirname(cache_torrent_path), exist_ok=True)
-            shutil.copy2(torrent_path, cache_torrent_path)
-            logger.debug(f"Cached torrent file to: {cache_torrent_path}")
-        return torrent_path
+                cached_torrent_path = self.cache.set(self.torrent_url, torrent_path)
+                logger.debug(f"Cached torrent file to: {cached_torrent_path}")
+                # Remove the torrent file from the temporary directory
+                os.remove(torrent_path)
+                return cached_torrent_path
 
     async def download_file(self, filename: Path) -> str:
         """
@@ -107,16 +167,17 @@ class TorrentDownloader:
         """
         # Accept pathlib.Path or str for filename
         filename_str = str(filename)
+        cache_key = self.torrent_url + ":" + str(filename)
 
-        cache_path = self._get_cache_path(filename_str)
-        if cache_path and os.path.exists(cache_path):
+        cache_path = self.cache.get(cache_key)
+        if cache_path:
             logger.debug(f"Cache hit for file '{filename_str}': {cache_path}")
             return cache_path
 
         logger.debug(f"Cache miss for file '{filename_str}', starting download")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            torrent_path = await self._download_torrent_file(tmpdir)
+        torrent_path = await self._download_torrent_file()
+        async with self.cache.lock_context(cache_key):
             logger.debug("Initializing torrent")
             torrent = Torrent(torrent_path)
             await torrent.init()
@@ -127,7 +188,7 @@ class TorrentDownloader:
             for idx, f in enumerate(torrent.torrent_info.get("files", [])):
                 file_path = _get_file_path_from_info(f)
                 # Compare using pathlib for robust path matching
-                if Path(file_path) == Path(filename_str) or file_path.endswith(
+                if Path(file_path) == filename or file_path.endswith(
                     filename_str
                 ):
                     file_info = f
@@ -147,20 +208,7 @@ class TorrentDownloader:
 
             logger.debug(f"Downloading file '{filename_str}' from torrent")
 
-            # Start progress monitoring task
-            progress_task = asyncio.create_task(
-                _monitor_download_progress(file_obj, filename_str)
-            )
-
-            try:
-                await torrent.download(file_obj)
-            finally:
-                # Cancel progress monitoring task
-                progress_task.cancel()
-                try:
-                    await progress_task
-                except asyncio.CancelledError:
-                    pass
+            await torrent.download(file_obj)
 
             file_abs_path = os.path.join(torrent.torrent_info["name"], file_obj.name)
             if not os.path.exists(file_abs_path):
@@ -168,28 +216,24 @@ class TorrentDownloader:
                     f"Downloaded file '{filename_str}' not found at expected location."
                 )
 
-            if cache_path:
-                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-                shutil.copy2(file_abs_path, cache_path)
-                logger.debug(f"Cached file '{filename_str}' to: {cache_path}")
-                # Remove the file from the temporary directory
-                os.remove(file_abs_path)
-
-                return cache_path
-            return file_abs_path
+            
+            cache_path = self.cache.set(cache_key, file_abs_path)
+            logger.debug(f"Cached file '{filename_str}' to: {cache_path}")
+            os.remove(file_abs_path)
+            
+            return cache_path
 
     async def list_files(self) -> List[tuple[str, int]]:
         """
         Lists all files available in the torrent.
         """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            torrent_path = await self._download_torrent_file(tmpdir)
-            logger.debug("Initializing torrent")
-            torrent = Torrent(torrent_path)
-            await torrent.init()
-            # Use torrent.torrent_info['files'] to get the full paths
-            files_info = torrent.torrent_info.get("files", [])
-            return [(_get_file_path_from_info(f), f["length"]) for f in files_info]
+        torrent_path = await self._download_torrent_file()
+        logger.debug("Initializing torrent")
+        torrent = Torrent(torrent_path)
+        await torrent.init()
+        # Use torrent.torrent_info['files'] to get the full paths
+        files_info = torrent.torrent_info.get("files", [])
+        return [(_get_file_path_from_info(f), f["length"]) for f in files_info]
 
 
 # Security warning:

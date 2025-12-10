@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from datetime import datetime
-from services.subreddit_snapshot import SubredditSnapshot
+from src.services.subreddit_snapshot import SubredditSnapshot
 
 
 class RedditWarper:

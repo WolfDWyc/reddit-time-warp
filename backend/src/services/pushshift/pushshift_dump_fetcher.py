@@ -3,7 +3,7 @@ import orjson
 from pathlib import Path
 import zstandard
 from typing import Iterator
-from services.pushshift.torrent_downloader import TorrentDownloader
+from src.services.pushshift.torrent_downloader import TorrentDownloader
 from loguru import logger
 
 
@@ -25,14 +25,14 @@ def read_and_decode(
         return read_and_decode(reader, chunk_size, max_window_size, chunk, bytes_read)
 
 
-def read_lines_zst(file_name):
+def read_lines_zst(file_name, chunk_size=2**21):
     with open(file_name, "rb") as file_handle:
         buffer = ""
         reader = zstandard.ZstdDecompressor(max_window_size=2**31).stream_reader(
             file_handle
         )
         while True:
-            chunk = read_and_decode(reader, 2**25, (2**29) * 2)
+            chunk = read_and_decode(reader, chunk_size, (2**29) * 2)
 
             if not chunk:
                 break
@@ -47,9 +47,10 @@ def read_lines_zst(file_name):
 
 
 class PushshiftDumpFetcher:
-    def __init__(self, torrent_downloader: TorrentDownloader, subreddits_path: str):
+    def __init__(self, torrent_downloader: TorrentDownloader, subreddits_path: str, read_chunk_size=2**21):
         self.torrent_downloader = torrent_downloader
         self.subreddits_path = subreddits_path
+        self.read_chunk_size = read_chunk_size
 
     async def fetch_subreddit_dump(self, subreddit_name: str) -> Iterator[dict]:
         submissions_filename = (
@@ -62,7 +63,7 @@ class PushshiftDumpFetcher:
 
         logger.debug(f"Got submissions file at: {submissions_file}, reading lines")
 
-        for line, file_bytes_processed in read_lines_zst(submissions_file):
+        for line, file_bytes_processed in read_lines_zst(submissions_file, self.read_chunk_size):
             yield orjson.loads(line)
 
     async def available_subreddits(self) -> list[tuple[str, int]]:
@@ -77,7 +78,7 @@ class PushshiftDumpFetcher:
 async def main():
     TORRENT_URL = "https://academictorrents.com/download/1614740ac8c94505e4ecb9d88be8bed7b6afddd4.torrent"
 
-    fetcher = PushshiftDumpFetcher(TorrentDownloader(TORRENT_URL), "subreddits24")
+    fetcher = PushshiftDumpFetcher(TorrentDownloader(TORRENT_URL), "subreddits24", read_chunk_size=2**21)
     async for submission in fetcher.fetch_subreddit_dump("invincible"):
         pass
 

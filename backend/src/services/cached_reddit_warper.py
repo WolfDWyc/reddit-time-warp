@@ -1,7 +1,7 @@
 from typing import Any
 from datetime import datetime
-from services.subreddit_snapshot import SubredditSnapshot
-from services.reddit_warper import RedditWarper
+from src.services.subreddit_snapshot import SubredditSnapshot
+from src.services.reddit_warper import RedditWarper
 from diskcache import Cache
 import hashlib
 import pickle
